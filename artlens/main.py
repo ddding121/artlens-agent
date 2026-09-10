@@ -18,7 +18,7 @@ from .provider import complete, configured, ModelUnavailable
 from .verification import verify, reference_path
 
 load_dotenv(Path(__file__).resolve().parents[1] / '.env', override=True)
-app = FastAPI(title='ArtLens Agent', version='0.1.1')
+app = FastAPI(title='ArtLens Agent', version='0.1.2')
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
 STATIC = Path(__file__).parent / 'static'
 app.mount('/static', StaticFiles(directory=STATIC), name='static')
@@ -63,7 +63,7 @@ def home():
 @app.get('/api/health')
 def health():
     return {'status': 'ok', 'model_configured': configured(), 'index_ready': (DATA / 'index.json').exists(),
-            'version': '0.1.1'}
+            'version': '0.1.2'}
 
 
 @app.get('/api/reference/{artwork_id}')
@@ -79,6 +79,7 @@ def reference(artwork_id: str):
 
 @app.post('/api/analyze')
 async def analyze(file: UploadFile = File(...)):
+    started = time.monotonic()
     raw = await file.read(10 * 1024 * 1024 + 1)
     await file.close()
     try:
@@ -119,14 +120,16 @@ async def analyze(file: UploadFile = File(...)):
     except ModelUnavailable as exc:
         model_ok = False
         warnings.append(str(exc))
-        answer = '无法确认作者与作品。\n图片已读取。当前没有可用的视觉模型回答，因此不生成画面解读。'
+        answer = '讲解服务暂不可用，已完成的检索与核验结果保留在上方。' if identity == 'likely_match' else '无法确认作者与作品。图片已读取，讲解服务暂不可用；候选详情请参阅核验结果。'
     prune()
     token = secrets.token_urlsafe(24)
     sessions[token] = {'created': time.monotonic(), 'image': clean, 'context': context,
                        'history': [{'role': 'assistant', 'content': answer}], 'lock': asyncio.Lock()}
     return {'session_id': token, 'identity': identity, 'answer': answer, 'candidates': candidates,
             'warnings': warnings, 'model_ok': model_ok, 'verification': verification,
-            'identified_work': candidates[0] if identity == 'likely_match' else None}
+            'identified_work': candidates[0] if identity == 'likely_match' else None,
+            'elapsed_seconds': round(time.monotonic() - started, 2),
+            'retrieval_gap': round(candidates[0]['score'] - candidates[1]['score'], 5) if len(candidates) >= 2 else None}
 
 
 class ChatRequest(BaseModel):

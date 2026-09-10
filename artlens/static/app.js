@@ -1,9 +1,10 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let session = null, previewURL = null, busy = false;
+let session = null, previewURL = null, busy = false, progressTimer = null;
 async function request(url, options) {
   const response = await fetch(url, options);
-  const data = await response.json();
+  let data;
+  try {data = await response.json();} catch (_) {throw new Error('服务未返回有效结果，请检查终端并重试。');}
   if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '请求失败，请检查输入。');
   return data;
 }
@@ -12,6 +13,7 @@ async function release() {
   if (old) await fetch('/api/session/' + encodeURIComponent(old), {method:'DELETE'}).catch(()=>{});
 }
 function resetResults() {
+  $('evidence').hidden = true; $('evidence').replaceChildren();
   $('answer').hidden = $('sources').hidden = $('conversation').hidden = true;
   $('empty').hidden = false; $('warnings').textContent = ''; $('messages').replaceChildren();
   $('identity').textContent = '等待分析'; $('chatError').textContent = '';
@@ -36,6 +38,7 @@ function renderSources(items, identity) {
     const card=document.createElement('div');card.className='card';
     const img=document.createElement('img');img.alt=item.title;img.loading='lazy';
     // 本地索引仅允许芝加哥馆藏图片和作品链接。
+    img.onerror=()=>{img.hidden=true;};
     if(/^\/api\/reference\/\d+$/.test(item.thumbnail_url || ''))img.src=item.thumbnail_url;
     const box=document.createElement('div'),a=document.createElement('a');
     a.textContent=`[${i+1}] ${item.title}`;a.target='_blank';a.rel='noopener noreferrer';
@@ -49,26 +52,22 @@ $('uploadForm').onsubmit=async e=>{
   e.preventDefault();if(busy)return;
   const file=$('file').files[0];if(!file)return;
   if(file.size>10*1024*1024){$('warnings').textContent='请上传不超过 10 MB 的图片。';return;}
-  lock(true);await release();resetResults();$('identity').textContent='正在分析…';$('analyze').textContent='正在检索与解读…';
+  lock(true);await release();resetResults();
+  startProgress('正在分析画作');$('identity').textContent='正在分析…';$('analyze').textContent='正在检索与解读…';
   try{const form=new FormData();form.append('file',file);const data=await request('/api/analyze',{method:'POST',body:form});
-    session=data.session_id;$('answer').textContent=data.answer;$('answer').hidden=false;$('empty').hidden=true;
+    session=data.session_id;ArtLensText.render($('answer'),data.answer);$('answer').hidden=false;$('empty').hidden=true;
     $('identity').textContent=data.identity==='likely_match'?'很可能匹配 · 双图核验通过':data.identity==='candidate'?'候选匹配 · 待核验':'作者尚未确认';
-    if(data.identified_work){
-      const work=data.identified_work;
-      const title=document.createElement('div');title.className='message';
-      title.textContent=`很可能是：${work.title}\n馆藏记录作者：${work.artist}\n年代：${work.date || '未记录'}\n核验依据：${data.verification.reason}\n此结果识别作品图像，不鉴定实物真伪。`;
-      $('answer').prepend(title);
-    }
+    renderEvidence(data);
     $('warnings').textContent=data.warnings.join('\n');renderSources(data.candidates, data.identity);$('conversation').hidden=!data.model_ok;
   }catch(err){$('warnings').textContent=err.message;$('identity').textContent='分析未完成';}
-  finally{lock(false);$('analyze').textContent='分析画作 ↗';}
+  finally{stopProgress();lock(false);$('analyze').textContent='分析画作 ↗';}
 };
-function message(text,role){const p=document.createElement('div');p.className='message '+role;p.textContent=text;$('messages').append(p);}
+function message(text,role){const p=document.createElement('div');p.className='message '+role;ArtLensText.render(p,text);$('messages').append(p);}
 $('chatForm').onsubmit=async e=>{
   e.preventDefault();if(busy||!session)return;const question=$('question').value.trim();if(!question)return;
-  lock(true);$('chatError').textContent='';
+  lock(true);$('send').textContent='正在回答…';$('chatError').textContent='';
   try{const data=await request('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:session,message:question})});message(question,'user');message(data.answer,'assistant');$('question').value='';}
-  catch(err){$('chatError').textContent=err.message;}finally{lock(false);}
+  catch(err){$('chatError').textContent=err.message;}finally{lock(false);$('send').textContent='发送问题';}
 };
 request('/api/health').then(d=>{$('readiness').textContent=`视觉模型：${d.model_configured?'已配置':'待配置'} · 馆藏索引：${d.index_ready?'已构建':'待构建'}`;}).catch(()=>{$('readiness').textContent='无法连接后端，请通过本地服务地址打开页面。';});
 
@@ -88,4 +87,24 @@ if (document.modelContext?.registerTool) {
     },{signal:lifecycle.signal})).catch(()=>{});
   } catch (_) {}
   window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});
+}
+
+function startProgress(label){
+  stopProgress();const started=performance.now();$('progress').hidden=false;
+  const update=()=>{$('progress').textContent=`${label} · 已等待 ${Math.floor((performance.now()-started)/1000)} 秒。首次检索需加载模型，双图核验会增加一次请求。`;};
+  update();progressTimer=setInterval(update,1000);
+}
+function stopProgress(){clearInterval(progressTimer);progressTimer=null;$('progress').hidden=true;}
+function renderEvidence(data){
+  const target=$('evidence');target.replaceChildren();target.hidden=false;
+  const work=data.identified_work;
+  const h=document.createElement('h2');h.textContent=work?work.title:'识别依据';target.append(h);
+  function row(label,value){const p=document.createElement('p');p.textContent=label+value;target.append(p);}
+  if(work){row('馆藏作者：',work.artist);row('年代：',work.date||'未记录');}
+  row('核验说明：',data.verification?.reason||'尚无可用核验说明。');
+  for(const detail of data.verification?.matches||[])row('对应细节：',detail);
+  for(const detail of data.verification?.differences||[])row('差异：',detail);
+  if(data.retrieval_gap!==null && data.retrieval_gap!==undefined)row('第一名领先幅度：',data.retrieval_gap.toFixed(3)+'（相似度差值，不是概率）');
+  row('本次服务处理耗时：',data.elapsed_seconds+' 秒');
+  if(work)row('判断范围：','很可能为同一作品的图像；模型复核仍可能出错，不鉴定实物真伪。');
 }

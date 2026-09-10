@@ -49,3 +49,21 @@ def test_local_thumbnail(monkeypatch,tmp_path):
     Image.new('RGB',(32,32)).save(tmp_path/'images'/'1.jpg')
     assert client.get('/api/reference/1').status_code==200
     assert client.get('/api/reference/2').status_code==404
+
+
+def test_verified_identity_survives_explanation_failure(monkeypatch):
+    from artlens.provider import ModelUnavailable
+    monkeypatch.setattr(main.retriever,'search',lambda im:[
+        {'id':'1','score':.999,'title':'A','artist':'Artist'},
+        {'id':'2','score':.862,'title':'B','artist':'Other'}])
+    async def verified(*args): return {'verdict':'same','reason':'match'}
+    async def fail(*args): raise ModelUnavailable('服务不可用')
+    monkeypatch.setattr(main,'verify',verified)
+    monkeypatch.setattr(main,'complete',fail)
+    r=client.post('/api/analyze',files={'file':('x.png',sample(),'image/png')}).json()
+    assert r['identity']=='likely_match'
+    assert r['identified_work']['artist']=='Artist'
+    assert '无法确认' not in r['answer']
+    assert r['elapsed_seconds'] >= 0 and r['retrieval_gap']==.137
+    assert not r['model_ok']
+    client.delete('/api/session/'+r['session_id'])
