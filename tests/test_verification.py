@@ -22,9 +22,9 @@ def test_identity_flow(monkeypatch, verdict, expected):
     client.delete('/api/session/'+r['session_id'])
 
 @pytest.mark.parametrize('payload,expected',[
- ('{"verdict":"same","matches":["姿态相同","构图相同"],"differences":[]}', 'same'),
- ('{"verdict":"same","matches":["风格相同"],"differences":[]}', 'uncertain'),
- ('{"verdict":"same","matches":["a","b"],"differences":["人物不同"]}', 'uncertain'),
+ ('{"verdict":"same","matches":["姿态相同","构图相同"],"contradictions":[],"region":"中央区域"}', 'same'),
+ ('{"verdict":"same","matches":["风格相同"],"contradictions":[],"region":"中央区域"}', 'uncertain'),
+ ('{"verdict":"same","matches":["a","b"],"contradictions":[{"location":"中央","upload":"左手","reference":"右手","both_visible":true}],"region":"中央区域"}', 'uncertain'),
  ('not json', 'uncertain')])
 def test_pair_validation(monkeypatch,tmp_path,payload,expected):
     monkeypatch.setattr(v,'DATA',tmp_path)
@@ -67,3 +67,28 @@ def test_verified_identity_survives_explanation_failure(monkeypatch):
     assert r['elapsed_seconds'] >= 0 and r['retrieval_gap']==.137
     assert not r['model_ok']
     client.delete('/api/session/'+r['session_id'])
+
+
+def test_crop_omissions_are_not_conflicts():
+    result = v.normalize_verification({'verdict':'same', 'region':'左上区域',
+        'matches':['同一位置手臂姿态相同','同一位置衣纹相同'],
+        'outside_crop':['下方第三人未出现在裁剪范围内'], 'contradictions':[]})
+    assert result['verdict']=='same'
+    assert not result['differences']
+    assert result['outside_crop']
+
+
+def test_rejection_without_shared_visible_conflict_is_uncertain():
+    result = v.normalize_verification({'verdict':'different', 'region':'左上区域',
+        'matches':[], 'outside_crop':['下方人物缺失'],
+        'contradictions':[{'location':'下方','upload':'未显示','reference':'人物','both_visible':False}]})
+    assert result['verdict']=='uncertain'
+    assert not result['differences']
+
+
+def test_real_shared_conflict_stays_different():
+    result = v.normalize_verification({'verdict':'different', 'region':'中央区域',
+        'matches':[], 'outside_crop':[],
+        'contradictions':[{'location':'同一只手','upload':'举起','reference':'放下','both_visible':True}]})
+    assert result['verdict']=='different'
+    assert result['differences']

@@ -53,7 +53,10 @@ class Retriever:
         doc = json.loads(manifest.read_text(encoding='utf-8'))
         self.model_id = doc['model']
         self.records = doc['records']
-        self.vectors = np.load(DATA / 'vectors.npy', allow_pickle=False)
+        vector_file = doc.get('vectors_file', 'vectors.npy')
+        if not isinstance(vector_file,str) or Path(vector_file).name != vector_file or not vector_file.endswith('.npy'):
+            raise ValueError('无效向量文件名')
+        self.vectors = np.load(DATA / vector_file, allow_pickle=False)
         if len(self.records) != len(self.vectors):
             raise ValueError('索引不一致，请重新构建。')
         self.model = CLIPModel.from_pretrained(self.model_id)

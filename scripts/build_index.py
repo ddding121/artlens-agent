@@ -13,6 +13,9 @@ from artlens.core import DATA, Retriever, decode_image
 
 
 def main():
+    manifest = DATA / 'index.json'
+    if manifest.exists() and json.loads(manifest.read_text(encoding='utf-8')).get('vectors_file'):
+        raise SystemExit('当前是多来源索引。此旧脚本会覆盖新增作品，已停止；请使用 scripts.import_famous 增量导入。')
     parser = argparse.ArgumentParser()
     parser.add_argument('--limit', type=int, default=200)
     parser.add_argument('--model', default='openai/clip-vit-base-patch32')

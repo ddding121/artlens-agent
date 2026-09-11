@@ -7,10 +7,16 @@
       return {tag:heading?'h3':bullet?'li':'p',text:(heading?.[1]||bullet?.[1]||line).replace(/\*\*([^*]+)\*\*/g,'$1')};
     });
   }
-  function render(target,text){
+  function render(target,text,sources=[]){
     target.replaceChildren(); let list=null;
     for(const block of blocks(text)){
-      const node=document.createElement(block.tag);node.textContent=block.text;
+      const node=document.createElement(block.tag);
+      for(const part of block.text.split(/(\[\d+\])/g)){
+        const match=part.match(/^\[(\d+)\]$/);
+        const source=match && sources.find(s=>s.source_id===Number(match[1]));
+        if(source){const a=document.createElement('a');a.textContent=part;a.href='#source-'+source.source_id;a.title=source.title;node.append(a);}
+        else node.append(document.createTextNode(part));
+      }
       if(block.tag==='li'){
         if(!list){list=document.createElement('ul');target.append(list);}
         list.append(node);
