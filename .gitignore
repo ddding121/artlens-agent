@@ -9,3 +9,7 @@ data/
 *.log
 .DS_Store
 .sites-runtime/
+google-vision-key.json
+*.zip
+evaluation/
+UPDATE*.txt

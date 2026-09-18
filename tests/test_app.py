@@ -129,3 +129,29 @@ def test_manual_different_never_promotes(monkeypatch):
     result = client.post('/api/verify', json={'session_id': token}).json()
     assert result['identity'] == 'unknown' and result['identified_work'] is None
     client.delete('/api/session/' + token)
+
+
+def test_unknown_uses_web_candidate_without_claiming_local_match(monkeypatch):
+    import artlens.main as main
+    monkeypatch.setattr(main.retriever, 'search', lambda image: [])
+    monkeypatch.setattr(main, 'web_configured', lambda: True)
+    monkeypatch.setattr(main.web_detector, 'search', lambda image: {
+        'status': 'candidate', 'reason': '发现可供核查的联网线索。',
+        'best_guess': ['Test Artwork'],
+        'entities': [{'name': 'Test Artwork', 'score': 1.0}],
+        'sources': [{'title': 'Museum page', 'url': 'https://example.org/work',
+                     'domain': 'example.org', 'official': False, 'match_type': 'full',
+                     'match_label': '发现完整匹配图片', 'source_kind': 'web'}],
+        'cached': False,
+    })
+    async def fake_complete(system, text, image=None, history=None):
+        assert 'web_candidate' in text and 'Museum page' in text
+        return '身份判断：发现联网候选 [1]，身份仍未确认。'
+    monkeypatch.setattr(main, 'complete', fake_complete)
+    data = client.post('/api/analyze', files={'file': ('x.png', sample(), 'image/png')}).json()
+    assert data['identity'] == 'web_candidate'
+    assert data['identified_work'] is None
+    assert data['web_search']['best_guess'] == ['Test Artwork']
+    assert data['sources'][0]['source_kind'] == 'web'
+    assert data['sources'][0]['source_id'] == 1
+    client.delete('/api/session/' + data['session_id'])

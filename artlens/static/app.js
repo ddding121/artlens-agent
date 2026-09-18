@@ -39,14 +39,18 @@ function renderSources(items, identity) {
   items.forEach((item,i)=>{
     const card=document.createElement('div');card.className='card';card.id='source-'+item.source_id;
     const img=document.createElement('img');img.alt=item.title;img.loading='lazy';
-    // 本地索引仅允许芝加哥馆藏图片和作品链接。
+    // 只有本地参考图通过后端读取；联网结果不直接加载第三方图片。
     img.onerror=()=>{img.hidden=true;};
     if(/^\/api\/reference\/(?:\d+|wd_Q\d+|met_\d+|cma_\d+)$/.test(item.thumbnail_url || ''))img.src=item.thumbnail_url;
+    else img.hidden=true;
     const box=document.createElement('div'),a=document.createElement('a');
     a.textContent=`[${i+1}] ${item.title}`;a.target='_blank';a.rel='noopener noreferrer';
-    try {const u=new URL(item.url);if(u.protocol==='https:' && ['www.artic.edu','www.wikidata.org','www.metmuseum.org','www.clevelandart.org','clevelandart.org'].includes(u.hostname) && !u.username && !u.password)a.href=u.href;} catch (_) {}
-    const p=document.createElement('p');p.textContent=[item.artist,item.date].filter(Boolean).join(' · ');
-    const score=document.createElement('small');score.textContent='余弦相似度 '+item.score.toFixed(3)+(i===0 && identity==='likely_match'?' · 双图核验通过':' · 未核验候选');
+    try {const u=new URL(item.url);if(u.protocol==='https:' && !u.username && !u.password)a.href=u.href;} catch (_) {}
+    const p=document.createElement('p');
+    p.textContent=item.source_kind==='web'?[item.domain,item.official?'优先来源':'辅助来源'].filter(Boolean).join(' · '):[item.artist,item.date].filter(Boolean).join(' · ');
+    const score=document.createElement('small');
+    score.textContent=item.source_kind==='web'?(item.match_label||'联网图片线索'):
+      '余弦相似度 '+Number(item.score).toFixed(3)+(i===0 && identity==='likely_match'?' · 双图核验通过':' · 未核验候选');
     box.append(a,p,score);
     if(item.source){const credit=document.createElement('p');credit.textContent=item.source+' · '+item.license;box.append(credit);}
     if(/^https:\/\/commons\.wikimedia\.org\/wiki\/File:/.test(item.image_source_url||'')){const credit=document.createElement('a');credit.textContent='图片来源与署名';credit.href=item.image_source_url;credit.target='_blank';credit.rel='noopener noreferrer';box.append(credit);}card.append(img,box);$('cards').append(card);
@@ -59,10 +63,10 @@ $('uploadForm').onsubmit=async e=>{
   lock(true);await release();resetResults();
   startProgress('正在分析画作');$('identity').textContent='正在分析…';$('analyze').textContent='正在检索与解读…';
   try{const form=new FormData();form.append('file',file);const data=await request('/api/analyze',{method:'POST',body:form});
-    session=data.session_id;currentSources=data.candidates;ArtLensText.render($('answer'),data.answer,currentSources);$('answer').hidden=false;$('empty').hidden=true;
-    $('identity').textContent=data.identity==='likely_match'?'很可能匹配 · 双图核验通过':data.identity==='candidate'?'候选匹配 · 待核验':'作者尚未确认';
+    session=data.session_id;currentSources=data.sources||data.candidates;ArtLensText.render($('answer'),data.answer,currentSources);$('answer').hidden=false;$('empty').hidden=true;
+    $('identity').textContent=data.identity==='likely_match'?'馆藏匹配 · 已核验':data.identity==='candidate'?'候选匹配 · 待核验':data.identity==='web_candidate'?'联网候选 · 身份未确认':'风格分析 · 身份未确认';
     renderEvidence(data);$('verifyPanel').hidden=!data.can_verify;
-    $('warnings').textContent=data.warnings.join('\n');renderSources(data.candidates, data.identity);$('conversation').hidden=!data.model_ok;
+    $('warnings').textContent=data.warnings.join('\n');renderSources(currentSources, data.identity);$('conversation').hidden=!data.model_ok;
   }catch(err){$('warnings').textContent=err.message;$('identity').textContent='分析未完成';}
   finally{stopProgress();lock(false);$('analyze').textContent='分析画作 ↗';}
 };
@@ -76,7 +80,7 @@ $('chatForm').onsubmit=async e=>{
     reply.append(note);$('chatError').textContent=(data.warnings||[]).join('\n');$('question').value='';}
   catch(err){$('chatError').textContent=err.message;}finally{lock(false);$('send').textContent='发送问题';}
 };
-request('/api/health').then(d=>{$('readiness').textContent=`视觉模型：${d.model_configured?'已配置':'待配置'} · 馆藏索引：${d.index_ready?'已构建（'+(d.artwork_count||0)+' 幅）':'待构建'}`;}).catch(()=>{$('readiness').textContent='无法连接后端，请通过本地服务地址打开页面。';});
+request('/api/health').then(d=>{const collection=d.index_ready?'本地馆藏：已构建（'+(d.artwork_count||0)+' 幅）':'识别模式：云端开放识别';$('readiness').textContent=`视觉模型：${d.model_configured?'已配置':'待配置'} · ${collection} · 联网识别：${d.web_search_configured?'已启用':'待启用'}`;}).catch(()=>{$('readiness').textContent='无法连接后端，请通过服务地址打开页面。';});
 
 // 支持时向浏览器智能体暴露当前可见结果；不代替用户选择或上传文件。
 if (document.modelContext?.registerTool) {
@@ -98,7 +102,7 @@ if (document.modelContext?.registerTool) {
 
 function startProgress(label){
   stopProgress();const started=performance.now();$('progress').hidden=false;
-  const update=()=>{$('progress').textContent=`${label} · 已等待 ${Math.floor((performance.now()-started)/1000)} 秒。首次检索需加载模型，双图核验会增加一次请求。`;};
+  const update=()=>{$('progress').textContent=`${label} · 已等待 ${Math.floor((performance.now()-started)/1000)} 秒。本地身份未确认时会继续联网查找证据。`;};
   update();progressTimer=setInterval(update,1000);
 }
 function stopProgress(){clearInterval(progressTimer);progressTimer=null;$('progress').hidden=true;}
@@ -115,6 +119,12 @@ function renderEvidence(data){
   const h=document.createElement('h2');h.textContent=work?work.title:'识别依据';target.append(h);
   function row(label,value){const p=document.createElement('p');p.textContent=label+value;target.append(p);}
   if(work){row('馆藏作者：',work.artist);row('年代：',work.date||'未记录');}
+  const web=data.web_search;
+  if(web?.status==='candidate'){
+    row('联网状态：',web.cached?'已复用相同图片的搜索结果。':'已完成 Web Detection。');
+    if(web.best_guess?.length)row('最佳猜测：',web.best_guess.join('；')+'（搜索线索，不是确认身份）');
+    if(web.entities?.length)row('相关实体：',web.entities.slice(0,5).map(x=>x.name).join('；'));
+  }else if(web?.reason){row('联网状态：',web.reason);}
   row('核验说明：',data.verification?.reason||'尚无可用核验说明。');
   if(data.verification?.region)row('共同区域：',data.verification.region);
   for(const detail of data.verification?.outside_crop||[])row('裁剪范围外（不作反证）：',detail);
@@ -132,9 +142,9 @@ $('verifyMore').onclick=async()=>{
   lock(true);$('verifyError').textContent='';$('verifyMore').textContent='正在核验并更新讲解…';
   try{
     const data=await request('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:session})});
-    currentSources=data.candidates;renderEvidence(data);renderSources(data.candidates,data.identity);
+    currentSources=data.sources||data.candidates;renderEvidence(data);renderSources(currentSources,data.identity);
     ArtLensText.render($('answer'),data.answer,currentSources);
-    $('identity').textContent=data.identity==='likely_match'?'很可能匹配 · 双图核验通过':'作者尚未确认';
+    $('identity').textContent=data.identity==='likely_match'?'馆藏匹配 · 已核验':data.identity==='web_candidate'?'联网候选 · 身份未确认':'风格分析 · 身份未确认';
     $('warnings').textContent=data.warnings.join('\n');$('verifyPanel').hidden=!data.can_verify;
     $('messages').replaceChildren();$('question').value='';$('chatError').textContent='';$('conversation').hidden=!data.model_ok;
   }catch(err){$('verifyError').textContent=err.message;}

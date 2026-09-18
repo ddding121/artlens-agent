@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: artlens-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn artlens.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ALLOWED_HOSTS
+        value: "*.onrender.com,localhost,127.0.0.1"
+      - key: WEB_SEARCH_ENABLED
+        value: "1"
+      - key: WEB_SEARCH_DAILY_LIMIT
+        value: "50"
+      - key: VISION_API_KEY
+        sync: false
+      - key: VISION_BASE_URL
+        sync: false
+      - key: VISION_MODEL
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
